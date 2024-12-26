@@ -120,18 +120,18 @@ RUN git clone --branch v1.5.0 https://github.com/novnc/noVNC.git /opt/noVNC && \
 
 ENV USERNAME={{ config.username }}
 ENV HOME=/home/$USERNAME
-RUN useradd -m -s /bin/bash -d $HOME $USERNAME
-RUN echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+RUN useradd -m -s /bin/bash -d $HOME $USERNAME && \
+ echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 USER $USERNAME
 WORKDIR $HOME
 
 {% if config.startup_scripts %}
 {% for script in config.startup_scripts %}
-RUN cat > $HOME/{{ script.filename }} <<EOF
+RUN cat > $HOME/{{ script.filename }} <<'EndOfFile'
 {{ script.script }}
-EOF 
+EndOfFile
 RUN chmod +x $HOME/{{ script.filename }} && \
-    echo "exec $HOME/{{ script.filename }}" >> $HOME/startup.sh
+    echo ". $HOME/{{ script.filename }}" >> $HOME/startup.sh
 {% endfor %}
 {% endif %}
 
@@ -168,7 +168,7 @@ ENV DISPLAY_NUM=$DISPLAY_NUM
 ENV HEIGHT=$HEIGHT
 ENV WIDTH=$WIDTH
 
-ENTRYPOINT ["/startup.sh"]
+ENTRYPOINT ["$HOME/startup.sh"]
 """
 
     def generate_dockerfile(self) -> str:
@@ -211,8 +211,6 @@ class DockerEnvironment:
         Returns the image ID.
         """
         dockerfile_content = self.generator.generate_dockerfile()
-
-        print(dockerfile_content)
 
         image, _ = self.client.images.build(
             fileobj=BytesIO(dockerfile_content.encode()),
