@@ -1,7 +1,7 @@
 # /usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from typing import TypedDict, List
+from typing import List, TypedDict
 
 
 class DesktopApp(TypedDict):

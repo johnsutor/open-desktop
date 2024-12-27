@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 
 import textwrap
-from typing import List
+from typing import List, TypedDict
 
 
-class StartupScript:
+class StartupScript(TypedDict):
     """
     Dict for configuring a startup script.
     """

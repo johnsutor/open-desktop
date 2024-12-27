@@ -1,0 +1,37 @@
+name: Lint and Type Check API
+
+on:
+    push:
+        branches:
+            - '**'
+    pull_request:
+        branches:
+            - '**'
+
+jobs:
+    lint_and_type_check:
+        runs-on: ubuntu-latest
+
+        steps:
+        - uses: actions/checkout@v3
+
+        - name: Set up Python
+          uses: actions/setup-python@v2
+          with:
+            python-version: '3.x'
+
+        - name: Install dependencies
+          run: |
+            python -m pip install --upgrade pip
+            pip install ruff mypy
+
+        - name: Run ruff
+          run: |
+            ruff check ./src
+
+        - name: Run ruff format 
+          run: |
+            ruff format ./src --check
+
+        - name: Run mypy
+          run: mypy ./src

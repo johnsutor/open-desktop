@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Literal, Tuple
-import docker.models
-from jinja2 import Environment, BaseLoader
-import docker
-from apps import DesktopApp, DEFAULT_APPS
-from startup import StartupScript, DEFAULT_STARTUP_SCRIPTS
-
 from io import BytesIO
+from typing import Dict, List, Literal, Optional, Tuple
+
+import docker
+import docker.models
+from apps import DEFAULT_APPS, DesktopApp
+from jinja2 import BaseLoader, Environment
+from startup import DEFAULT_STARTUP_SCRIPTS, StartupScript
 
 SUPPORTED_LINUX_IMAGES = Literal["ubuntu:22.04",]
 
@@ -125,17 +125,21 @@ RUN useradd -m -s /bin/bash -d $HOME $USERNAME && \
 USER $USERNAME
 WORKDIR $HOME
 
+RUN cat > $HOME/entrypoint.sh <<'EndOfFile'
+#!/bin/bash
+EndOfFile
+
 {% if config.startup_scripts %}
 {% for script in config.startup_scripts %}
 RUN cat > $HOME/{{ script.filename }} <<'EndOfFile'
 {{ script.script }}
 EndOfFile
 RUN chmod +x $HOME/{{ script.filename }} && \
-    echo ". $HOME/{{ script.filename }}" >> $HOME/startup.sh
+    echo ". $HOME/{{ script.filename }}" >> $HOME/entrypoint.sh
 {% endfor %}
 {% endif %}
 
-RUN chmod +x $HOME/startup.sh
+RUN chmod +x $HOME/entrypoint.sh
 RUN git clone https://github.com/pyenv/pyenv.git ~/.pyenv && \
     cd ~/.pyenv && src/configure && make -C src && cd .. && \
     echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.bashrc && \
@@ -168,7 +172,7 @@ ENV DISPLAY_NUM=$DISPLAY_NUM
 ENV HEIGHT=$HEIGHT
 ENV WIDTH=$WIDTH
 
-ENTRYPOINT ["$HOME/startup.sh"]
+ENTRYPOINT ["./entrypoint.sh"]
 """
 
     def generate_dockerfile(self) -> str:
@@ -192,7 +196,7 @@ class DockerEnvironment:
     """
 
     container: docker.models.containers.Container
-    image_id: str
+    image_id: Optional[str]
     verbose: bool = True
 
     def __init__(self, config: DockerConfig):
@@ -218,20 +222,14 @@ class DockerEnvironment:
             quiet=not self.verbose,
         )
 
-        return image.id
+        return str(image.id)
 
     def run_environment(
         self,
-        ports: Optional[Dict[str, str]] = None,
-        volumes: Optional[Dict[str, Dict[str, str]]] = None,
-    ):
+    ) -> None:
         """
         Run a container from the built environment.
         Returns the container object.
-
-        Args:
-            ports: A dictionary of port mappings.
-            volumes: A dictionary of volume mappings.
 
         Returns:
             The container object.
@@ -239,9 +237,11 @@ class DockerEnvironment:
         if not self.image_id:
             self.image_id = self.build_environment()
 
-        return self.client.containers.run(
-            self.image_id, detach=True, ports=ports, volumes=volumes
+        container = self.client.containers.run(
+            self.image_id, detach=True, privileged=True, ports=self.config.ports_mapping
         )
+
+        self.container = container
 
 
 if __name__ == "__main__":
