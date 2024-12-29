@@ -27,11 +27,11 @@ jobs:
 
         - name: Run ruff
           run: |
-            ruff check ./src
+            python -m ruff check ./src
 
         - name: Run ruff format 
           run: |
-            ruff format ./src --check
+            python -m ruff format ./src --check
 
         - name: Run mypy
-          run: mypy ./src
+          run: python -m mypy ./src

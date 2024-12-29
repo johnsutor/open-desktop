@@ -1,6 +1,7 @@
 # /usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import socket
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Dict, List, Literal, Optional, Tuple
@@ -8,6 +9,7 @@ from typing import Dict, List, Literal, Optional, Tuple
 import docker
 import docker.models
 from apps import DEFAULT_APPS, DesktopApp
+from docker.errors import APIError
 from jinja2 import BaseLoader, Environment
 from startup import DEFAULT_STARTUP_SCRIPTS, StartupScript
 
@@ -125,9 +127,8 @@ RUN useradd -m -s /bin/bash -d $HOME $USERNAME && \
 USER $USERNAME
 WORKDIR $HOME
 
-RUN cat > $HOME/entrypoint.sh <<'EndOfFile'
-#!/bin/bash
-EndOfFile
+RUN echo '#!/bin/bash' > $HOME/entrypoint.sh && \
+    echo 'set -e' >> $HOME/entrypoint.sh
 
 {% if config.startup_scripts %}
 {% for script in config.startup_scripts %}
@@ -184,7 +185,7 @@ ENTRYPOINT ["./entrypoint.sh"]
         template = self.template_env.from_string(self._base_template)
         dockerfile_content = template.render(config=self.config)
 
-        return dockerfile_content
+        return str(dockerfile_content)
 
 
 class DockerEnvironment:
@@ -207,6 +208,37 @@ class DockerEnvironment:
         self.container = None
         self.image_id = None
 
+    def _is_port_in_use(self, port: int) -> bool:
+        """Check if a port is already in use."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("", port))
+                return False
+            except socket.error:
+                return True
+
+    def _get_available_ports(self, num_ports: int = 10) -> Dict[str, str]:
+        """Find available ports starting from the given port.
+
+        Args:
+            num_ports: The number of ports to find.
+        """
+        available_ports = {}
+
+        for original_port in self.config.ports_mapping:
+            start_port = int(self.config.ports_mapping[original_port])
+            current_port = int(start_port)
+            while self._is_port_in_use(current_port):
+                current_port += 1
+                if current_port >= start_port + num_ports:
+                    raise RuntimeError(
+                        f"Could not find available port in range {start_port}-{start_port + num_ports}"
+                    )
+            available_ports[original_port] = str(current_port)
+            current_port += 1
+
+        return available_ports
+
     def build_environment(
         self,
     ) -> str:
@@ -216,32 +248,50 @@ class DockerEnvironment:
         """
         dockerfile_content = self.generator.generate_dockerfile()
 
-        image, _ = self.client.images.build(
-            fileobj=BytesIO(dockerfile_content.encode()),
-            tag=self.config.tag,
-            quiet=not self.verbose,
-        )
+        try:
+            image, _ = self.client.images.build(
+                fileobj=BytesIO(dockerfile_content.encode()),
+                tag=self.config.tag,
+                quiet=not self.verbose,
+            )
+            return str(image.id)
+        except docker.errors.BuildError as e:
+            raise RuntimeError(f"Failed to build Docker image: {str(e)}") from e
 
-        return str(image.id)
-
-    def run_environment(
-        self,
-    ) -> None:
+    def run_environment(self, auto_port_allocation: bool = True) -> None:
         """
         Run a container from the built environment.
-        Returns the container object.
+
+        Args:
+            auto_port_allocation: If True, automatically find available ports if the default ones are in use.
 
         Returns:
-            The container object.
+            None
+
+        Raises:
+            RuntimeError: If container creation or startup fails.
         """
         if not self.image_id:
             self.image_id = self.build_environment()
 
-        container = self.client.containers.run(
-            self.image_id, detach=True, privileged=True, ports=self.config.ports_mapping
-        )
+        try:
+            ports = self.config.ports_mapping
+            if auto_port_allocation:
+                ports = self._get_available_ports()
+                if self.verbose:
+                    print(f"Using ports: {ports}")
 
-        self.container = container
+            container = self.client.containers.run(
+                self.image_id, detach=True, privileged=True, ports=ports
+            )
+            self.container = container
+
+        except APIError as e:
+            if "port is already allocated" in str(e) and not auto_port_allocation:
+                raise RuntimeError(
+                    "Port allocation failed. Try running with auto_port_allocation=True"
+                ) from e
+            raise RuntimeError(f"Failed to start container: {str(e)}") from e
 
 
 if __name__ == "__main__":
